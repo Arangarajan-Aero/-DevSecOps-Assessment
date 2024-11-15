@@ -1,6 +1,7 @@
 pipeline {
     agent any
     environment {
+        SCANNER_HOME = tool 'sonarqube-01'
         AWS_REGION = 'ap-south-1'
         ECR_REPO_WEB = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
         ECR_REPO_API = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
@@ -45,16 +46,16 @@ pipeline {
                         script {
                             def projectName = 'DevSecOps'
                             def projectKey = 'DevSecOps'
-                            
+
                             // Run SonarQube analysis with specified project details
                             withSonarQubeEnv('sonar-qube') {
+                                def scannerHome = tool name: 'sonarqube-01', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
                                 sh """
-                                    $SCANNER_HOME/bin/sonar-scanner \
+                                    ${scannerHome}/bin/sonar-scanner \
                                     -Dsonar.projectKey=${projectKey} \
                                     -Dsonar.projectName=${projectName} \
-                                    -Dsonar.sources=src \
-                                    -Dsonar.host.url=${env.SONAR_HOST_URL} \
-                                    -Dsonar.login=${env.SONAR_TOKEN}  // Ensure SonarQube token is configured in environment
+                                    -Dsonar.sources=. \
+                                    -Dsonar.host.url=${env.SONAR_HOST_URL}
                                 """
                             }
                         }
@@ -78,7 +79,7 @@ pipeline {
                     // Timeout to wait for SonarQube Quality Gate results
                     timeout(time: 10, unit: 'MINUTES') {
                         def qualityGate = waitForQualityGate() // Waits for the quality gate result from SonarQube
-                        
+
                         // Check if the quality gate status is not 'OK' and handle according to the user selection
                         if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
                             error "Pipeline failed due to not meeting the quality gate conditions. Status: ${qualityGate.status}"
