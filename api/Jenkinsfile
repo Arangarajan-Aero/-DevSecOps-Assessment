@@ -4,8 +4,7 @@ pipeline {
         DOCKER_IMAGE = 'aero1602/api'
         SCANNER_HOME = tool 'sonarqube-01'
         AWS_REGION = 'ap-south-1'
-        ECR_REPO_WEB = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
-        ECR_REPO_API = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
+        ECR_REPOSITORY = '905418475780.dkr.ecr.ap-south-1.amazonaws.com/dev/api'
         IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT}" // Ensure this is properly set
         DEPLOY_ENV = '' // Variable for deploy environment (dev/prod)
     }
@@ -55,6 +54,7 @@ pipeline {
                         script {
                             def projectName = 'api'
                             def projectKey = 'api'
+                            def coverageThreshold = '80'
 
                             // Run SonarQube analysis with specified project details and branch
                             withSonarQubeEnv('sonar-qube') {
@@ -66,6 +66,7 @@ pipeline {
                                     -Dsonar.sources=. \
                                     -Dsonar.host.url=${env.SONAR_HOST_URL} \
                                     -Dsonar.qualitygate=80 \
+                                    -Dsonar.coverage.new=${coverageThreshold} \
                                     -Dsonar.language=py \
                                     -Dsonar.python.coverage.reportPaths=coverage.xml
                                 """
@@ -114,18 +115,25 @@ pipeline {
             }
         }
 
-        // stage('Push API Image to ECR') {
-        //     steps {
-        //         script {
-        //             // Log in to AWS ECR and push the API image for the correct environment
-        //             sh """
-        //                 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_API}
-        //                 docker tag ${DEPLOY_ENV}-api:${IMAGE_TAG} ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}
-        //                 docker push ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}
-        //             """
-        //             echo "Docker Image pushed to ECR: ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
-        //         }
-        //     }
-        // }
+
+
+
+       stage("Push to ECR") {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aces-key']]) {
+                    script {
+                        // Login to ECR
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}"
+                        echo "login successfull"
+                        // Tag the Docker image for ECR
+                        sh "docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        echo "Taged successful"
+                        // Push the Docker image to ECR
+                        sh "docker push ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        echo "Docker image ${DOCKER_IMAGE}:${IMAGE_TAG} pushed to ECR successfully"
+                    }
+                }
+            }
+        }
     }
 }
