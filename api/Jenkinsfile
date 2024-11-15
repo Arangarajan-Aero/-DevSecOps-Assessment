@@ -1,0 +1,93 @@
+pipeline {
+    agent any
+    parameters {
+        choice(
+            name: 'QualityGate',
+            choices: ['Pass', 'Fail'],
+            description: 'Select whether to fail the pipeline on quality gate failure'
+        )
+    }
+    stages {
+        stage('Cleaning Workspace') {
+            steps {
+                cleanWs() // Ensure the workspace is cleaned before the build
+            }
+        }
+
+        stage('Static Code Analysis') {
+            parallel {
+                stage('SonarQube Analysis') {
+                    steps {
+                        script {
+                            def projectName = 'DevSecOps'
+                            def projectKey = 'DevSecOps'
+                            def coverageThreshold = '80' // This can be used for additional checks if needed
+
+                            // Run SonarQube analysis with specified project details
+                            withSonarQubeEnv('sonar-qube') {
+                                sh """
+                                    sonar-scanner \
+                                    -Dsonar.projectKey=${projectKey} \
+                                    -Dsonar.projectName=${projectName} \
+                                    -Dsonar.sources=src \
+                                    -Dsonar.host.url=${env.SONAR_HOST_URL} \
+                                    -Dsonar.login=sonar-qube // Ensure the SonarQube token is set in your environment
+                                """
+                            }
+                        }
+                    }
+                }
+
+                stage('OWASP Dependency Check') {
+                    steps {
+                        dependencyCheck additionalArguments: '--scan ./ --format ALL', 
+                                        odcInstallation: 'dp-check', 
+                                        stopBuild: true  
+                        dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate Check') {
+            steps {
+                script {
+                    // Timeout to wait for SonarQube Quality Gate results
+                    timeout(time: 10, unit: 'MINUTES') {
+                        def qualityGate = waitForQualityGate()  // Waits for the quality gate result from SonarQube
+                        
+                        // Check if the quality gate status is not 'OK' and handle according to the user selection
+                        if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
+                            error "Pipeline failed due to not meeting the quality gate conditions. Status: ${qualityGate.status}"
+                        } else {
+                            echo "Quality Gate status: ${qualityGate.status} (Expected: OK)"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Testing') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        sh '''
+                        # Run unit test cases
+                        pytest --junitxml=unit-test-results.xml
+                        '''
+                    }
+                }
+
+                stage('Integration Tests') {
+                    steps {
+                        sh '''
+                        # Run integration test cases for API service
+                        pytest --junitxml=integration-test-results.xml integration_tests/
+                        '''
+                    }
+                }
+            }
+        }
+    }
+    
+}
