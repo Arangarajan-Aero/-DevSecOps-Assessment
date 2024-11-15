@@ -1,7 +1,6 @@
 pipeline {
     agent any
     environment {
-        SCANNER_HOME = tool 'sonar-qube'
         AWS_REGION = 'ap-south-1'
         ECR_REPO_WEB = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
         ECR_REPO_API = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
@@ -27,10 +26,10 @@ pipeline {
                 script {
                     // Set the deploy environment based on the branch being built
                     if (env.BRANCH_NAME == 'develop') {
-                        DEPLOY_ENV = 'dev'
+                        env.DEPLOY_ENV = 'dev'
                         echo "Deploying to Dev Environment"
                     } else if (env.BRANCH_NAME == 'master') {
-                        DEPLOY_ENV = 'prod'
+                        env.DEPLOY_ENV = 'prod'
                         echo "Deploying to Prod Environment"
                     } else {
                         error "Unsupported branch. Only 'develop' and 'master' are supported."
@@ -46,8 +45,7 @@ pipeline {
                         script {
                             def projectName = 'DevSecOps'
                             def projectKey = 'DevSecOps'
-                            def coverageThreshold = '80' // This can be used for additional checks if needed
-
+                            
                             // Run SonarQube analysis with specified project details
                             withSonarQubeEnv('sonar-qube') {
                                 sh """
@@ -56,7 +54,7 @@ pipeline {
                                     -Dsonar.projectName=${projectName} \
                                     -Dsonar.sources=src \
                                     -Dsonar.host.url=${env.SONAR_HOST_URL} \
-                                    -Dsonar.login=sonar-qube // Ensure the SonarQube token is set in your environment
+                                    -Dsonar.login=${env.SONAR_TOKEN}  // Ensure SonarQube token is configured in environment
                                 """
                             }
                         }
@@ -79,7 +77,7 @@ pipeline {
                 script {
                     // Timeout to wait for SonarQube Quality Gate results
                     timeout(time: 10, unit: 'MINUTES') {
-                        def qualityGate = waitForQualityGate()  // Waits for the quality gate result from SonarQube
+                        def qualityGate = waitForQualityGate() // Waits for the quality gate result from SonarQube
                         
                         // Check if the quality gate status is not 'OK' and handle according to the user selection
                         if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
@@ -94,94 +92,40 @@ pipeline {
 
         stage('Run Tests') {
             steps {
-                script {
-                    // Run unit tests for the web app
-                    dir('web') {
-                        sh 'npm install'  // Install dependencies
-                        sh 'npm run test:unit'
-                    }
-                    // Run integration tests for the web app
-                    dir('web') {
-                        sh 'npm run test:integ'
-                    }
-                    // Run integration tests for the API service
-                    dir('api') {
-                        sh 'python3 test.py'
-                    }
+                dir('api') {
+                    sh 'python3 test.py' // Run integration tests for the API service
                 }
             }
         }
 
-        stage('Build Docker Images') {
-            parallel {
-                stage('Build Web Image') {
-                    steps {
-                        script {
-                            dir('web') {
-                                // Build web app image for the correct environment
-                                sh "docker build -t ${DEPLOY_ENV}-web:$IMAGE_TAG ."
-                            }
-                        }
-                    }
-                }
-
-                stage('Build API Image') {
-                    steps {
-                        script {
-                            dir('api') {
-                                // Build API app image for the correct environment
-                                sh "docker build -t ${DEPLOY_ENV}-api:$IMAGE_TAG ."
-                            }
-                        }
+        stage('Build API Image') {
+            steps {
+                script {
+                    dir('api') {
+                        // Build API app image for the correct environment
+                        sh "docker build -t ${DEPLOY_ENV}-api:${IMAGE_TAG} ."
                     }
                 }
             }
         }
 
         stage('Anchore Image Scan') {
-            parallel {
-                stage('Scan Web Image') {
-                    steps {
-                        script {
-                            // Scan the web image for vulnerabilities
-                            sh 'anchore scan --output json --image ${DEPLOY_ENV}-web:$IMAGE_TAG > anchore-scan-web.json'
-                            archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan-web.json'
-                        }
-                    }
-                }
-
-                stage('Scan API Image') {
-                    steps {
-                        script {
-                            // Scan the API image for vulnerabilities
-                            sh 'anchore scan --output json --image ${DEPLOY_ENV}-api:$IMAGE_TAG > anchore-scan-api.json'
-                            archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan-api.json'
-                        }
-                    }
+            steps {
+                script {
+                    // Scan the API image for vulnerabilities
+                    sh "anchore scan --output json --image ${DEPLOY_ENV}-api:${IMAGE_TAG} > anchore-scan-api.json"
+                    archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan-api.json'
                 }
             }
         }
 
-        stage('Push Images to ECR') {
-            parallel {
-                stage('Push Web Image to ECR') {
-                    steps {
-                        script {
-                            // Log in to AWS ECR and push the web image for the correct environment
-                            sh 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 836759839628.dkr.ecr.$AWS_REGION.amazonaws.com'
-                            sh "docker push 836759839628.dkr.ecr.$AWS_REGION.amazonaws.com/${DEPLOY_ENV}/web:$IMAGE_TAG"
-                        }
-                    }
-                }
-
-                stage('Push API Image to ECR') {
-                    steps {
-                        script {
-                            // Log in to AWS ECR and push the API image for the correct environment
-                            sh 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 836759839628.dkr.ecr.$AWS_REGION.amazonaws.com'
-                            sh "docker push 836759839628.dkr.ecr.$AWS_REGION.amazonaws.com/${DEPLOY_ENV}/api:$IMAGE_TAG"
-                        }
-                    }
+        stage('Push API Image to ECR') {
+            steps {
+                script {
+                    // Log in to AWS ECR and push the API image for the correct environment
+                    sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_API}"
+                    sh "docker tag ${DEPLOY_ENV}-api:${IMAGE_TAG} ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
+                    sh "docker push ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
                 }
             }
         }
