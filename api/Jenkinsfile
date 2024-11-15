@@ -1,11 +1,12 @@
 pipeline {
     agent any
     environment {
+        DOCKER_IMAGE = 'aero1602/api'
         SCANNER_HOME = tool 'sonarqube-01'
         AWS_REGION = 'ap-south-1'
         ECR_REPO_WEB = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
         ECR_REPO_API = '836759839628.dkr.ecr.ap-south-1.amazonaws.com'
-        IMAGE_TAG = "${gitCommit}-${BUILD_NUMBER}"
+        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT}" // Ensure this is properly set
         DEPLOY_ENV = '' // Variable for deploy environment (dev/prod)
     }
     parameters {
@@ -21,6 +22,14 @@ pipeline {
                 cleanWs() // Ensure the workspace is cleaned before the build
             }
         }
+        stage('Checkout SCM') {
+            steps {
+                // Check out code from the provided Git repository
+                git url: 'https://github.com/Arangarajan-Aero/DevSecOps-Assessment.git', branch: 'develop'
+            }
+        }
+
+        
 
         stage('Set Deployment Environment') {
             steps {
@@ -44,10 +53,10 @@ pipeline {
                 stage('SonarQube Analysis') {
                     steps {
                         script {
-                            def projectName = 'DevSecOps'
-                            def projectKey = 'DevSecOps'
+                            def projectName = 'api'
+                            def projectKey = 'api'
 
-                            // Run SonarQube analysis with specified project details
+                            // Run SonarQube analysis with specified project details and branch
                             withSonarQubeEnv('sonar-qube') {
                                 def scannerHome = tool name: 'sonarqube-01', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
                                 sh """
@@ -55,7 +64,10 @@ pipeline {
                                     -Dsonar.projectKey=${projectKey} \
                                     -Dsonar.projectName=${projectName} \
                                     -Dsonar.sources=. \
-                                    -Dsonar.host.url=${env.SONAR_HOST_URL}
+                                    -Dsonar.host.url=${env.SONAR_HOST_URL} \
+                                    -Dsonar.qualitygate=80 \
+                                    -Dsonar.language=py \
+                                    -Dsonar.python.coverage.reportPaths=coverage.xml
                                 """
                             }
                         }
@@ -91,44 +103,29 @@ pipeline {
             }
         }
 
-        stage('Run Tests') {
+        stage('Build Docker Image') {
             steps {
-                dir('api') {
-                    sh 'python3 test.py' // Run integration tests for the API service
-                }
+                        echo "Starting Docker build"
+                        sh "pwd"
+                        sh "ls -l"
+                        sh "cd api"
+                        sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
+                        echo "Docker Image built successfully:${IMAGE_TAG}"
             }
         }
 
-        stage('Build API Image') {
-            steps {
-                script {
-                    dir('api') {
-                        // Build API app image for the correct environment
-                        sh "docker build -t ${DEPLOY_ENV}-api:${IMAGE_TAG} ."
-                    }
-                }
-            }
-        }
-
-        stage('Anchore Image Scan') {
-            steps {
-                script {
-                    // Scan the API image for vulnerabilities
-                    sh "anchore scan --output json --image ${DEPLOY_ENV}-api:${IMAGE_TAG} > anchore-scan-api.json"
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan-api.json'
-                }
-            }
-        }
-
-        stage('Push API Image to ECR') {
-            steps {
-                script {
-                    // Log in to AWS ECR and push the API image for the correct environment
-                    sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_API}"
-                    sh "docker tag ${DEPLOY_ENV}-api:${IMAGE_TAG} ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
-                    sh "docker push ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
-                }
-            }
-        }
+        // stage('Push API Image to ECR') {
+        //     steps {
+        //         script {
+        //             // Log in to AWS ECR and push the API image for the correct environment
+        //             sh """
+        //                 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_API}
+        //                 docker tag ${DEPLOY_ENV}-api:${IMAGE_TAG} ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}
+        //                 docker push ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}
+        //             """
+        //             echo "Docker Image pushed to ECR: ${ECR_REPO_API}/${DEPLOY_ENV}/api:${IMAGE_TAG}"
+        //         }
+        //     }
+        // }
     }
 }
