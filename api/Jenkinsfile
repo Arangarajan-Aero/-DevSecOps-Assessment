@@ -1,5 +1,13 @@
 pipeline {
     agent any
+    environment {
+        DOCKER_IMAGE = 'aero1602/api'
+        SCANNER_HOME = tool 'sonarqube-01'
+        AWS_REGION = 'ap-south-1'
+        ECR_REPOSITORY = '905418475780.dkr.ecr.ap-south-1.amazonaws.com/dev/api'
+        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT}" // Ensure this is properly set
+        DEPLOY_ENV = '' // Variable for deploy environment (dev/prod)
+    }
     parameters {
         choice(
             name: 'QualityGate',
@@ -13,25 +21,54 @@ pipeline {
                 cleanWs() // Ensure the workspace is cleaned before the build
             }
         }
+        stage('Checkout SCM') {
+            steps {
+                // Check out code from the provided Git repository
+                git url: 'https://github.com/Arangarajan-Aero/DevSecOps-Assessment.git', branch: 'master'
+            }
+        }
+
+        
+
+        stage('Set Deployment Environment') {
+            steps {
+                script {
+                    // Set the deploy environment based on the branch being built
+                    if (env.BRANCH_NAME == 'develop') {
+                        env.DEPLOY_ENV = 'dev'
+                        echo "Deploying to Dev Environment"
+                    } else if (env.BRANCH_NAME == 'master') {
+                        env.DEPLOY_ENV = 'prod'
+                        echo "Deploying to Prod Environment"
+                    } else {
+                        error "Unsupported branch. Only 'develop' and 'master' are supported."
+                    }
+                }
+            }
+        }
 
         stage('Static Code Analysis') {
             parallel {
                 stage('SonarQube Analysis') {
                     steps {
                         script {
-                            def projectName = 'DevSecOps'
-                            def projectKey = 'DevSecOps'
-                            def coverageThreshold = '80' // This can be used for additional checks if needed
+                            def projectName = 'api-master'
+                            def projectKey = 'api-master'
+                            def coverageThreshold = '80'
 
-                            // Run SonarQube analysis with specified project details
+                            // Run SonarQube analysis with specified project details and branch
                             withSonarQubeEnv('sonar-qube') {
+                                def scannerHome = tool name: 'sonarqube-01', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
                                 sh """
-                                    sonar-scanner \
+                                    ${scannerHome}/bin/sonar-scanner \
                                     -Dsonar.projectKey=${projectKey} \
                                     -Dsonar.projectName=${projectName} \
-                                    -Dsonar.sources=src \
+                                    -Dsonar.sources=. \
                                     -Dsonar.host.url=${env.SONAR_HOST_URL} \
-                                    -Dsonar.login=sonar-qube // Ensure the SonarQube token is set in your environment
+                                    -Dsonar.qualitygate=80 \
+                                    -Dsonar.coverage.new=${coverageThreshold} \
+                                    -Dsonar.language=py \
+                                    -Dsonar.python.coverage.reportPaths=coverage.xml
                                 """
                             }
                         }
@@ -54,8 +91,8 @@ pipeline {
                 script {
                     // Timeout to wait for SonarQube Quality Gate results
                     timeout(time: 10, unit: 'MINUTES') {
-                        def qualityGate = waitForQualityGate()  // Waits for the quality gate result from SonarQube
-                        
+                        def qualityGate = waitForQualityGate() // Waits for the quality gate result from SonarQube
+
                         // Check if the quality gate status is not 'OK' and handle according to the user selection
                         if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
                             error "Pipeline failed due to not meeting the quality gate conditions. Status: ${qualityGate.status}"
@@ -67,27 +104,36 @@ pipeline {
             }
         }
 
-        stage('Testing') {
-            parallel {
-                stage('Unit Tests') {
-                    steps {
-                        sh '''
-                        # Run unit test cases
-                        pytest --junitxml=unit-test-results.xml
-                        '''
-                    }
-                }
+        stage('Build Docker Image') {
+            steps {
+                        echo "Starting Docker build"
+                        sh "pwd"
+                        sh "ls -l"
+                        sh "cd api"
+                        sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
+                        echo "Docker Image built successfully:${IMAGE_TAG}"
+            }
+        }
 
-                stage('Integration Tests') {
-                    steps {
-                        sh '''
-                        # Run integration test cases for API service
-                        pytest --junitxml=integration-test-results.xml integration_tests/
-                        '''
+
+
+
+       stage("Push to ECR") {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aces-key']]) {
+                    script {
+                        // Login to ECR
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}"
+                        echo "login successfull"
+                        // Tag the Docker image for ECR
+                        sh "docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        echo "Taged successful"
+                        // Push the Docker image to ECR
+                        sh "docker push ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        echo "Docker image ${DOCKER_IMAGE}:${IMAGE_TAG} pushed to ECR successfully"
                     }
                 }
             }
         }
     }
-    
 }
