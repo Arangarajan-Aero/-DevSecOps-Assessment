@@ -1,6 +1,7 @@
 pipeline {
     agent any
     environment {
+        EMAIL_RECIPIENTS = 'arangarajan16.002@gmail.com' // Replace with actual recipients
         DOCKER_IMAGE = 'aero1602/api'
         SCANNER_HOME = tool 'sonarqube-01'
         AWS_REGION = 'ap-south-1'
@@ -27,9 +28,6 @@ pipeline {
                 git url: 'https://github.com/Arangarajan-Aero/DevSecOps-Assessment.git', branch: 'develop'
             }
         }
-
-        
-
         stage('Set Deployment Environment') {
             steps {
                 script {
@@ -46,7 +44,6 @@ pipeline {
                 }
             }
         }
-
         stage('Static Code Analysis') {
             parallel {
                 stage('SonarQube Analysis') {
@@ -106,33 +103,57 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                        echo "Starting Docker build"
-                        sh "pwd"
-                        sh "ls -l"
-                        sh "cd api"
-                        sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
-                        echo "Docker Image built successfully:${IMAGE_TAG}"
+                echo "Starting Docker build"
+                sh "pwd"
+                sh "ls -l"
+                sh "cd api"
+                sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
+                echo "Docker Image built successfully: ${IMAGE_TAG}"
             }
         }
 
-
-
-
-       stage("Push to ECR") {
+        stage("Push to ECR") {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aces-key']]) {
                     script {
                         // Login to ECR
                         sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}"
-                        echo "login successfull"
+                        echo "Login successful"
                         // Tag the Docker image for ECR
                         sh "docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${ECR_REPOSITORY}:${IMAGE_TAG}"
-                        echo "Taged successful"
+                        echo "Tagging successful"
                         // Push the Docker image to ECR
                         sh "docker push ${ECR_REPOSITORY}:${IMAGE_TAG}"
                         echo "Docker image ${DOCKER_IMAGE}:${IMAGE_TAG} pushed to ECR successfully"
                     }
                 }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                // Define email content
+                def subject = "Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}"
+                def body = """
+                <p>Build Status: ${currentBuild.currentResult}</p>
+                <p>Commit ID: ${env.GIT_COMMIT}</p>
+                <p>Build Link: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                <p>Triggered By: ${env.BUILD_USER}</p>
+                <p>Reports:</p>
+                <ul>
+                    <li><a href="${env.BUILD_URL}artifact/dependency-check-report.xml">OWASP Dependency Check Report</a></li>
+                </ul>
+                """
+
+                // Send email notification
+                emailext(
+                    to: EMAIL_RECIPIENTS,
+                    subject: subject,
+                    body: body,
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'dependency-check-report.xml'
+                )
             }
         }
     }
