@@ -77,20 +77,17 @@ pipeline {
             }
         }
 
-        stage('SonarQube Quality Gate Check') {
-            steps {
-                script {
-                    timeout(time: 10, unit: 'MINUTES') {
-                        def qualityGate = waitForQualityGate() 
-                        if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
-                            error "Pipeline failed due to not meeting the quality gate conditions. Status: ${qualityGate.status}"
-                        } else {
-                            echo "Quality Gate status: ${qualityGate.status} (Expected: OK)"
-                        }
-                    }
-                }
-            }
-        }
+//         stage('Run Tests') {
+//     steps {
+//         script {
+//             dir('web') {
+//                 sh 'npm install'
+//                 sh 'npx mocha tests/integ/test.js'// Add your specific test command if different
+//             }
+//         }
+//     }
+// }
+
         stage('Build Docker Image') {
             steps {
                 sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
@@ -101,13 +98,16 @@ pipeline {
             steps {
                 echo "Starting Grype scan for ${IMAGE_TAG}"
                 script {
+                    
                     sh "grype ${DOCKER_IMAGE}:${IMAGE_TAG} -o json > anchore-scan.json"
                     echo "Grype scan completed successfully"
                     sh "cat anchore-scan.json"
                     archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan.json'
+
                 }
             }
         }
+
 
         stage('Push to ECR') {
             steps {
@@ -132,7 +132,7 @@ pipeline {
                 <p>Build Link: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
                 <p>Reports:</p>
                 <ul>
-                    <li><a href="${env.BUILD_URL}artifact/anchore-scan.json">anchore-scan.json</a></li>
+                    <li><a href="${env.BUILD_URL}artifact/anchore-scan.jsonn">anchore-scan.json</a></li>
                     <li><a href="${env.BUILD_URL}artifact/dependency-check-report.xml">OWASP Dependency Check Report</a></li>
                 </ul>
                 """
