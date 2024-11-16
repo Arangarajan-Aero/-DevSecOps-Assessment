@@ -105,7 +105,7 @@ pipeline {
                     sh "grype ${DOCKER_IMAGE}:${IMAGE_TAG} -o json > anchore-scan.json"
                     echo "Grype scan completed successfully"
                     sh "cat anchore-scan.json"
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'grype-scan-api.json'
+                    archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan.json'
 
                 }
             }
@@ -135,6 +135,7 @@ pipeline {
                 <p>Build Link: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
                 <p>Reports:</p>
                 <ul>
+                    <li><a href="${env.BUILD_URL}artifact/anchore-scan.jsonn">anchore-scan.json</a></li>
                     <li><a href="${env.BUILD_URL}artifact/dependency-check-report.xml">OWASP Dependency Check Report</a></li>
                 </ul>
                 """
@@ -143,7 +144,7 @@ pipeline {
                     subject: subject,
                     body: body,
                     mimeType: 'text/html',
-                    attachmentsPattern: 'dependency-check-report.xml'
+                    attachmentsPattern: 'dependency-check-report.xml,anchore-scan.json'
                 )
             }
         }
