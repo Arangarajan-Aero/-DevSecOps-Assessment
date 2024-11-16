@@ -1,5 +1,14 @@
 pipeline {
     agent any
+    environment {
+        EMAIL_RECIPIENTS = 'arangarajan16.002@gmail.com' // Replace with actual recipients
+        DOCKER_IMAGE = 'aero1602/api'
+        SCANNER_HOME = tool 'sonarqube-01'
+        AWS_REGION = 'ap-south-1'
+        ECR_REPOSITORY = '905418475780.dkr.ecr.ap-south-1.amazonaws.com/dev/api'
+        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT}" // Ensure this is properly set
+        DEPLOY_ENV = '' // Variable for deploy environment (dev/prod)
+    }
     parameters {
         choice(
             name: 'QualityGate',
@@ -13,31 +22,50 @@ pipeline {
                 cleanWs() // Ensure the workspace is cleaned before the build
             }
         }
-
+        stage('Checkout SCM') {
+            steps {
+                git url: 'https://github.com/Arangarajan-Aero/DevSecOps-Assessment.git', branch: 'develop'
+            }
+        }
+        stage('Set Deployment Environment') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'develop') {
+                        env.DEPLOY_ENV = 'dev'
+                        echo "Deploying to Dev Environment"
+                    } else if (env.BRANCH_NAME == 'master') {
+                        env.DEPLOY_ENV = 'prod'
+                        echo "Deploying to Prod Environment"
+                    } else {
+                        error "Unsupported branch. Only 'develop' and 'master' are supported."
+                    }
+                }
+            }
+        }
         stage('Static Code Analysis') {
             parallel {
                 stage('SonarQube Analysis') {
                     steps {
                         script {
-                            def projectName = 'DevSecOps'
-                            def projectKey = 'DevSecOps'
-                            def coverageThreshold = '80' // This can be used for additional checks if needed
+                            def projectName = 'api-web'
+                            def projectKey = 'api-web'
+                            def coverageThreshold = '80'
 
-                            // Run SonarQube analysis with specified project details
                             withSonarQubeEnv('sonar-qube') {
+                                def scannerHome = tool name: 'sonarqube-01', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
                                 sh """
-                                    sonar-scanner \
+                                    ${scannerHome}/bin/sonar-scanner \
                                     -Dsonar.projectKey=${projectKey} \
                                     -Dsonar.projectName=${projectName} \
-                                    -Dsonar.sources=src \
+                                    -Dsonar.sources=web \
                                     -Dsonar.host.url=${env.SONAR_HOST_URL} \
-                                    -Dsonar.login=sonar-qube // Ensure the SonarQube token is set in your environment
+                                    -Dsonar.language=js \
+                                    -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
                                 """
                             }
                         }
                     }
                 }
-
                 stage('OWASP Dependency Check') {
                     steps {
                         dependencyCheck additionalArguments: '--scan ./ --format ALL', 
@@ -52,11 +80,8 @@ pipeline {
         stage('SonarQube Quality Gate Check') {
             steps {
                 script {
-                    // Timeout to wait for SonarQube Quality Gate results
                     timeout(time: 10, unit: 'MINUTES') {
-                        def qualityGate = waitForQualityGate()  // Waits for the quality gate result from SonarQube
-                        
-                        // Check if the quality gate status is not 'OK' and handle according to the user selection
+                        def qualityGate = waitForQualityGate() 
                         if (params.QualityGate == 'Fail' && qualityGate.status != 'OK') {
                             error "Pipeline failed due to not meeting the quality gate conditions. Status: ${qualityGate.status}"
                         } else {
@@ -66,28 +91,59 @@ pipeline {
                 }
             }
         }
-
-        stage('Testing') {
-            parallel {
-                stage('Unit Tests') {
-                    steps {
-                        sh '''
-                        # Run unit test cases
-                        pytest --junitxml=unit-test-results.xml
-                        '''
-                    }
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ./api"
+                echo "Docker Image built successfully: ${IMAGE_TAG}"
+            }
+        }
+        stage('Run Anchore Grype Scan') {
+            steps {
+                echo "Starting Grype scan for ${IMAGE_TAG}"
+                script {
+                    sh "grype ${DOCKER_IMAGE}:${IMAGE_TAG} -o json > anchore-scan.json"
+                    echo "Grype scan completed successfully"
+                    sh "cat anchore-scan.json"
+                    archiveArtifacts allowEmptyArchive: true, artifacts: 'anchore-scan.json'
                 }
+            }
+        }
 
-                stage('Integration Tests') {
-                    steps {
-                        sh '''
-                        # Run integration test cases for API service
-                        pytest --junitxml=integration-test-results.xml integration_tests/
-                        '''
+        stage('Push to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aces-key']]) {
+                    script {
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}"
+                        sh "docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        sh "docker push ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        echo "Docker image ${DOCKER_IMAGE}:${IMAGE_TAG} pushed to ECR successfully"
                     }
                 }
             }
         }
     }
-    
+    post {
+        always {
+            script {
+                def subject = "Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}"
+                def body = """
+                <p>Build Status: ${currentBuild.currentResult}</p>
+                <p>Commit ID: ${env.GIT_COMMIT}</p>
+                <p>Build Link: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                <p>Reports:</p>
+                <ul>
+                    <li><a href="${env.BUILD_URL}artifact/anchore-scan.json">anchore-scan.json</a></li>
+                    <li><a href="${env.BUILD_URL}artifact/dependency-check-report.xml">OWASP Dependency Check Report</a></li>
+                </ul>
+                """
+                emailext(
+                    to: EMAIL_RECIPIENTS,
+                    subject: subject,
+                    body: body,
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'dependency-check-report.xml,anchore-scan.json'
+                )
+            }
+        }
+    }
 }
